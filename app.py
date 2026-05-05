@@ -692,7 +692,7 @@ if run_analysis:
             temp, humidity, lat, lon = weather
 
             with st.spinner("🔄 Running satellite downscaling model..."):
-                sat_data = satellite_downscaling(temp, humidity, lat, lon)
+                sat_data = satellite_downscaling(temp, humidity, lat, lon, city=city)
 
             df = pd.DataFrame(sat_data)
 

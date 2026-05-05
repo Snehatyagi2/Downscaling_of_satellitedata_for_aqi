@@ -1,65 +1,75 @@
+"""
+predict.py - AQI prediction (EPA formula), 7-day forecast (ML), report generation.
+"""
 import pickle
 import numpy as np
 import pandas as pd
+import datetime
 from src.api_pollution import get_pollution, get_pollution_history
 from src.api_weather import get_weather
-from src.logic import pollution_score, locality_type, detailed_reason
+from src.logic import compute_aqi, pollution_score, locality_type, detailed_reason
+
+_forecast_model = None
 
 
-def load_model():
-    with open("model/model.pkl","rb") as f:
-        return pickle.load(f)
-    
-
-def satellite_downscaling(temp, humidity, lat, lon):
-    from src.satellite import generate_satellite_grid
-
-    model = load_model()
-    grid = generate_satellite_grid(lat, lon)
-
-    results = []
-
-    for point in grid:
-        data = pd.DataFrame([[point["no2"], temp, humidity]], columns=["NO2", "Temperature", "Humidity"])
-        aqi = model.predict(data)[0]
-
-        results.append({
-            "lat": point["lat"],
-            "lon": point["lon"],
-            "aqi": round(aqi, 2)
-        })
-
-    return results
+def _load_forecast_model():
+    global _forecast_model
+    if _forecast_model is None:
+        with open("model/forecast_model.pkl", "rb") as f:
+            _forecast_model = pickle.load(f)
+    return _forecast_model
 
 
-def predict_aqi(no2, temp, humidity):
-    model = load_model()
-    data = pd.DataFrame([[no2, temp, humidity]], columns=["NO2", "Temperature", "Humidity"])
-    return float(model.predict(data)[0])
+def predict_aqi(pm25, pm10, no2, temp=None, humidity=None):
+    """Current AQI via deterministic EPA formula. No ML needed."""
+    return float(compute_aqi(pm25, pm10, no2))
 
 
-def smart_forecast(no2, temp, humidity, history):
-    model = load_model()
+def smart_forecast(current_aqi, temp, humidity, history):
+    """
+    7-day recursive (autoregressive) AQI forecast using GBR model.
+    history: list of recent AQI values (minimum 7; padded if shorter).
+    Returns: list of 7 predicted AQI values.
+    """
+    model = _load_forecast_model()
 
-    trend = sum(history[-3:]) / 3 if len(history) >= 3 else no2
+    # Pad history if too short
+    window = list(history) if history else []
+    while len(window) < 7:
+        window.insert(0, current_aqi)
+    window.append(current_aqi)
+
+    now = datetime.datetime.now()
+    today_dow = now.weekday()
+    month = now.month
 
     preds = []
+    for day_offset in range(1, 8):
+        lag1 = window[-1]
+        lag7 = window[-7] if len(window) >= 7 else window[0]
+        rolling3 = float(np.mean(window[-3:]))
+        dow = (today_dow + day_offset) % 7
+        is_weekend = 1 if dow >= 5 else 0
 
-    for i in range(1,8):
-        adjusted_no2 = (no2 + trend)/2 + i*1.5
-        adjusted_temp = temp + i*0.2
-        adjusted_humidity = humidity + i*0.8
-
-        data = pd.DataFrame([[adjusted_no2, adjusted_temp, adjusted_humidity]], columns=["NO2", "Temperature", "Humidity"])
-        pred = model.predict(data)[0]
-        preds.append(round(float(pred), 2))
+        feat_cols = ["aqi_lag1", "aqi_lag7", "aqi_rolling3", "temp",
+                     "humidity", "day_of_week", "month", "is_weekend"]
+        features = pd.DataFrame([[lag1, lag7, rolling3, temp, humidity,
+                                   dow, month, is_weekend]], columns=feat_cols)
+        predicted = float(np.clip(model.predict(features)[0], 0, 500))
+        preds.append(round(predicted, 2))
+        window.append(predicted)
 
     return preds
 
 
-def generate_report(city="Delhi"):
+def satellite_downscaling(temp, humidity, lat, lon, city="Delhi"):
+    """Run satellite downscaling pipeline. Returns list of {lat, lon, aqi}."""
+    from src.satellite import generate_satellite_grid
+    return generate_satellite_grid(lat, lon, city=city, n_points=50)
 
-    model = load_model()
+
+def generate_report(city="Delhi"):
+    """Generate full AQI report for all stations in a city."""
     pollution = get_pollution(city)
     history = get_pollution_history(city)
     weather = get_weather(city)
@@ -68,24 +78,24 @@ def generate_report(city="Delhi"):
         return None
 
     temp, humidity, lat, lon = weather
-
     report = []
 
     for p in pollution:
-        score = pollution_score(p["pm25"], p["pm10"], p["no2"])
-        aqi = predict_aqi(p["no2"], temp, humidity)
-        area = locality_type(p["location"])
-        reason = detailed_reason(aqi, area, p["pm25"])
+        pm25, pm10, no2 = p["pm25"], p["pm10"], p["no2"]
 
-        forecast = smart_forecast(score, temp, humidity, history)
+        aqi = predict_aqi(pm25, pm10, no2)
+        score = pollution_score(pm25, pm10, no2)
+        area = locality_type(p["location"])
+        reason = detailed_reason(aqi, area, pm25, pm10, no2)
+        forecast = smart_forecast(aqi, temp, humidity, history)
 
         report.append({
             "location": p["location"],
-            "aqi": round(aqi,2),
-            "score": round(score,2),
+            "aqi": round(aqi, 2),
+            "score": round(score, 2),
             "area": area,
             "forecast": forecast,
-            "reason": reason
+            "reason": reason,
         })
 
     return report
