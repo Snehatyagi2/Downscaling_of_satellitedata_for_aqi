@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 import requests
 import random
+from src.stability import stable_seed
 
 load_dotenv()
 API_KEY = os.getenv("OPENWEATHER_API_KEY")
@@ -60,5 +61,6 @@ def _fallback(city):
         lat, lon, bt, bh = _DEFAULTS[key]
     else:
         lat, lon, bt, bh = 22.0, 78.0, 30, 55
-    return (round(bt + random.uniform(-3, 3), 1),
-            int(bh + random.uniform(-8, 8)), lat, lon)
+    rng = random.Random(stable_seed(city, bucket_seconds=1800, salt="weather"))
+    return (round(bt + rng.uniform(-3, 3), 1),
+            int(bh + rng.uniform(-8, 8)), lat, lon)

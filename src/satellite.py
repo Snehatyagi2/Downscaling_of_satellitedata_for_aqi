@@ -10,6 +10,7 @@ import math
 import numpy as np
 from src.logic import compute_aqi
 from src.api_satellite import fetch_coarse_grid
+from src.stability import stable_seed
 
 # ─── City Bounding Boxes ────────────────────────────────────────────────────
 
@@ -59,10 +60,11 @@ def _get_fallback_coarse(city):
     """City-tier based fallback when Open-Meteo is unavailable."""
     tier = _TIER_MAP.get(city.lower().strip(), "moderate")
     r = _TIER_RANGES[tier]
+    rng = random.Random(stable_seed(city, bucket_seconds=1800, salt="satellite-fallback"))
     return {
-        "pm25": random.uniform(r[0], r[1]),
-        "pm10": random.uniform(r[2], r[3]),
-        "no2": random.uniform(r[4], r[5]),
+        "pm25": rng.uniform(r[0], r[1]),
+        "pm10": rng.uniform(r[2], r[3]),
+        "no2": rng.uniform(r[4], r[5]),
     }
 
 
@@ -175,6 +177,7 @@ def generate_satellite_grid(center_lat, center_lon, city="Delhi", n_points=50):
     # Fetch coarse grid from Open-Meteo
     coarse_grid = fetch_coarse_grid(center_lat, center_lon)
     use_fallback = coarse_grid is None
+    rng = random.Random(stable_seed(city, bucket_seconds=1800, salt="satellite-grid"))
 
     # Build coarse lookup
     def get_coarse(lat, lon):
@@ -191,15 +194,15 @@ def generate_satellite_grid(center_lat, center_lon, city="Delhi", n_points=50):
 
     results = []
     for _ in range(n_points):
-        lat = random.uniform(lat_min, lat_max)
-        lon = random.uniform(lon_min, lon_max)
+        lat = rng.uniform(lat_min, lat_max)
+        lon = rng.uniform(lon_min, lon_max)
 
         coarse = get_coarse(lat, lon)
         land_use = _assign_land_use(lat, lon, center_lat, center_lon)
         dist_road = _dist_to_road(lat, lon, center_lat, center_lon)
-        elev_delta = random.uniform(-20, 20)
-        ndvi = _NDVI[land_use] + random.gauss(0, 0.03)
-        pop = _POP[land_use] + random.gauss(0, 0.03)
+        elev_delta = rng.uniform(-20, 20)
+        ndvi = _NDVI[land_use] + rng.gauss(0, 0.03)
+        pop = _POP[land_use] + rng.gauss(0, 0.03)
 
         features = np.array([[
             coarse["no2"], coarse["pm25"], coarse["pm10"], dist_road,

@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -17,259 +18,192 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_report(city):
+    return generate_report(city)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_satellite_weather(city):
+    return get_weather(city)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_satellite_grid(city):
+    weather = cached_satellite_weather(city)
+    if weather is None:
+        return None
+    temp, humidity, lat, lon = weather
+    return satellite_downscaling(temp, humidity, lat, lon, city=city)
+
 # ─── Custom CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     /* ── Import Google Font ─── */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
     /* ── Global ─── */
     html, body, .stApp {
-        font-family: 'Inter', sans-serif;
-        background: radial-gradient(circle at top, #0f172a, #020617);
+        font-family: 'Outfit', sans-serif;
+        background: #050505;
+        background-image: 
+            radial-gradient(circle at 15% 50%, rgba(20, 15, 40, 0.6), transparent 25%),
+            radial-gradient(circle at 85% 30%, rgba(10, 25, 40, 0.6), transparent 25%);
         color: #E2E8F0;
     }
     .stApp > header { background: transparent !important; }
 
     /* ── Sidebar ─── */
     section[data-testid="stSidebar"] {
-        background: rgba(15, 12, 41, 0.45) !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
-        border-right: 1px solid rgba(255,255,255,0.08) !important;
+        background: rgba(10, 10, 12, 0.7) !important;
+        backdrop-filter: blur(24px) !important;
+        -webkit-backdrop-filter: blur(24px) !important;
+        border-right: 1px solid rgba(255,255,255,0.04) !important;
     }
-    /* Hide the ugly sidebar scrollbar */
-    section[data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {
-        display: none !important;
-        width: 0 !important;
-    }
-    section[data-testid="stSidebar"] > div:first-child {
-        scrollbar-width: none !important;
-        -ms-overflow-style: none !important;
-    }
+    section[data-testid="stSidebar"] > div:first-child::-webkit-scrollbar { display: none !important; }
+    section[data-testid="stSidebar"] > div:first-child { scrollbar-width: none !important; }
     section[data-testid="stSidebar"] .stMarkdown p,
     section[data-testid="stSidebar"] .stMarkdown li,
     section[data-testid="stSidebar"] label {
-        color: #b8c5d6 !important;
+        color: #A1A1AA !important;
     }
-
-    /* ── Headers ─── */
-    .main-title {
-        font-size: 32px;
-        font-weight: 700;
-        background: linear-gradient(135deg, #7C5CFF 0%, #00D4FF 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        text-align: center;
-        margin-bottom: 0;
-        letter-spacing: -0.5px;
-    }
-    .main-subtitle {
-        text-align: center;
-        color: #7a8ba3;
-        font-size: 1rem;
-        font-weight: 400;
-        margin-top: 4px;
-        margin-bottom: 30px;
-    }
-
-    /* ── Glass Card (SaaS Style) ─── */
+    
+    /* ── Glass Card (Premium SaaS) ─── */
     .glass-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
+        background: linear-gradient(145deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
         padding: 24px;
         margin-bottom: 16px;
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        transition: all 200ms ease-in-out;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     }
     .glass-card:hover {
-        transform: translateY(-2px) scale(1.01);
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-        border-color: rgba(124, 92, 255, 0.3);
+        transform: translateY(-4px);
+        box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+        border-color: rgba(255, 255, 255, 0.1);
     }
 
-    /* ── AQI Metric ─── */
-    .aqi-metric {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 20px 12px;
-        border-radius: 14px;
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.06);
-    }
-    .aqi-value {
-        font-size: 2.8rem;
-        font-weight: 800;
-        letter-spacing: -1px;
-        line-height: 1;
-    }
-    .aqi-label {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        color: #7a8ba3;
-        margin-top: 8px;
-        font-weight: 600;
-    }
+    /* ── Typography & Headers ─── */
+    h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif !important; }
 
-    /* ── AQI Color Levels ─── */
-    .aqi-good { color: #00e676; }
-    .aqi-moderate { color: #ffeb3b; }
-    .aqi-unhealthy-sg { color: #ff9800; }
-    .aqi-unhealthy { color: #ff5252; }
-    .aqi-very-unhealthy { color: #e040fb; }
-    .aqi-hazardous { color: #d50000; }
-
-    /* ── Badge ─── */
-    .badge {
-        display: inline-block;
-        padding: 4px 14px;
-        border-radius: 50px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        letter-spacing: 0.8px;
-        text-transform: uppercase;
-    }
-    .badge-industrial { background: rgba(255,82,82,0.15); color: #ff5252; border: 1px solid rgba(255,82,82,0.25); }
-    .badge-traffic { background: rgba(255,152,0,0.15); color: #ff9800; border: 1px solid rgba(255,152,0,0.25); }
-    .badge-residential { background: rgba(0,230,118,0.15); color: #00e676; border: 1px solid rgba(0,230,118,0.25); }
-    .badge-mixed { background: rgba(0,210,255,0.15); color: #00d2ff; border: 1px solid rgba(0,210,255,0.25); }
-
-    /* ── Location Header ─── */
-    .location-header {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #e8edf2;
-        margin-bottom: 6px;
-    }
-    .reason-text {
-        color: #8899aa;
-        font-size: 0.88rem;
-        font-style: italic;
-        margin-top: 4px;
-    }
-
-    /* ── Stat Row ─── */
-    .stat-label { color: #6b7c8d; font-size: 0.78rem; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
-    .stat-value { color: #e2eaf2; font-size: 1.3rem; font-weight: 700; }
-
-    /* ── Info Box ─── */
-    .info-box {
-        background: rgba(0, 210, 255, 0.06);
-        border: 1px solid rgba(0, 210, 255, 0.15);
-        border-radius: 12px;
-        padding: 16px 20px;
-        color: #9ab8d0;
-        font-size: 0.85rem;
-        line-height: 1.6;
-    }
-
-    /* ── Divider ─── */
-    .custom-divider {
-        border: none;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-        margin: 24px 0;
-    }
-
-    /* ── Tab Style ─── */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 12px;
-        padding: 6px;
-        border: 1px solid rgba(255,255,255,0.06);
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 10px 24px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        color: #7a8ba3;
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(0,210,255,0.15), rgba(123,47,247,0.15)) !important;
-        color: #ffffff !important;
-    }
-
-    /* ── Hide Streamlit Defaults ─── */
-    #MainMenu { visibility: hidden; }
-    footer { visibility: hidden; }
-    header[data-testid="stHeader"] { background: transparent; }
-
-    /* ── Metric Overrides ─── */
+    /* ── Metrics ─── */
     [data-testid="stMetric"] {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        padding: 16px;
+        background: linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     }
-    [data-testid="stMetricLabel"] { color: #7a8ba3 !important; }
-    [data-testid="stMetricValue"] { color: #e8edf2 !important; }
+    [data-testid="stMetricLabel"] { color: #A1A1AA !important; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; font-size: 0.8rem; }
+    [data-testid="stMetricValue"] { color: #FFFFFF !important; font-weight: 700; font-family: 'Outfit'; }
 
-    /* ── Button ─── */
+    /* ── Buttons ─── */
     .stButton > button {
-        background: linear-gradient(135deg, #00d2ff, #7b2ff7) !important;
-        color: white !important;
+        background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%) !important;
+        color: #0f172a !important;
         border: none !important;
-        border-radius: 10px !important;
+        border-radius: 12px !important;
         padding: 12px 28px !important;
         font-weight: 600 !important;
-        font-size: 0.9rem !important;
-        letter-spacing: 0.3px !important;
+        font-size: 0.95rem !important;
+        letter-spacing: 0.5px !important;
         transition: all 0.3s ease !important;
-        box-shadow: 0 4px 20px rgba(0, 210, 255, 0.25) !important;
+        box-shadow: 0 4px 15px rgba(255, 255, 255, 0.1) !important;
     }
     .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 8px 30px rgba(0, 210, 255, 0.35) !important;
+        transform: translateY(-2px) scale(1.02) !important;
+        box-shadow: 0 8px 25px rgba(255, 255, 255, 0.2) !important;
+        background: #ffffff !important;
     }
 
     /* ── Input & Selectbox ─── */
-    .stTextInput > div > div > input,
-    div[data-baseweb="select"] > div {
-        background: rgba(255,255,255,0.05) !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 10px !important;
-        color: #e8edf2 !important;
-        font-size: 1rem !important;
+    .stTextInput > div > div > input, div[data-baseweb="select"] > div {
+        background: rgba(255,255,255,0.03) !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+        border-radius: 12px !important;
+        color: #ffffff !important;
+        font-family: 'Outfit' !important;
+        transition: border 0.3s ease !important;
     }
-    .stTextInput label,
-    .stSelectbox label {
-        color: #7a8ba3 !important;
-        font-weight: 500 !important;
+    div[data-baseweb="select"] > div:hover {
+        border: 1px solid rgba(255,255,255,0.2) !important;
     }
+    .stTextInput label, .stSelectbox label { color: #A1A1AA !important; font-weight: 500 !important; }
     ul[data-baseweb="menu"] {
-        background-color: #1a1a2e !important;
+        background-color: #0a0a0c !important;
         border: 1px solid rgba(255,255,255,0.1) !important;
     }
     li[role="option"] {
         color: #e8edf2 !important;
         background-color: transparent !important;
     }
-    li[role="option"]:hover,
-    li[aria-selected="true"] {
-        background-color: rgba(0, 210, 255, 0.15) !important;
+    li[role="option"]:hover, li[aria-selected="true"] {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+    }
+    
+    /* ── Tabs ─── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(255,255,255,0.02);
+        border-radius: 14px;
+        padding: 6px;
+        border: 1px solid rgba(255,255,255,0.04);
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 10px;
+        padding: 10px 24px;
+        font-weight: 600;
+        color: #A1A1AA;
+        transition: all 0.3s;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(255,255,255,0.1) !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+
+    /* ── Dividers ─── */
+    .custom-divider {
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+        margin: 30px 0;
+    }
+
+    /* ── Info Box ─── */
+    .info-box {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 14px;
+        padding: 20px;
+        color: #A1A1AA;
+        font-size: 0.9rem;
+        line-height: 1.6;
     }
 
     /* ── Expander ─── */
     .streamlit-expanderHeader {
         background: rgba(255,255,255,0.03) !important;
-        border-radius: 10px !important;
-        color: #e8edf2 !important;
+        border-radius: 12px !important;
+        color: #ffffff !important;
+        font-family: 'Outfit' !important;
     }
 
-    /* ── Scrollbar ─── */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
-    ::-webkit-scrollbar-thumb { background: rgba(0,210,255,0.3); border-radius: 3px; }
+    /* Hide Defaults */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #050505; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 </style>
 """, unsafe_allow_html=True)
-
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 
@@ -303,7 +237,7 @@ def create_aqi_gauge(aqi_value, title="AQI"):
         mode="gauge+number",
         value=aqi_value,
         title={"text": title, "font": {"size": 14, "color": "#7a8ba3"}},
-        number={"font": {"size": 42, "color": color, "family": "Inter"}, "suffix": ""},
+        number={"font": {"size": 42, "color": color, "family": "Outfit"}, "suffix": ""},
         gauge={
             "axis": {"range": [0, 500], "tickwidth": 1, "tickcolor": "rgba(255,255,255,0.1)",
                      "tickfont": {"color": "#5a6a7a", "size": 10}},
@@ -331,7 +265,7 @@ def create_aqi_gauge(aqi_value, title="AQI"):
         margin=dict(l=20, r=20, t=40, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"family": "Inter"}
+        font={"family": "Outfit"}
     )
 
     return fig
@@ -386,21 +320,21 @@ def create_forecast_chart(forecast_values):
         xaxis=dict(
             showgrid=False,
             color="#5a6a7a",
-            tickfont=dict(family="Inter", size=11)
+            tickfont=dict(family="Outfit", size=11)
         ),
         yaxis=dict(
             showgrid=True,
             gridcolor="rgba(255,255,255,0.04)",
             color="#5a6a7a",
-            tickfont=dict(family="Inter", size=11),
+            tickfont=dict(family="Outfit", size=11),
             title=dict(text="AQI", font=dict(size=12, color="#5a6a7a"))
         ),
         showlegend=False,
-        font=dict(family="Inter"),
+        font=dict(family="Outfit"),
         hoverlabel=dict(
             bgcolor="#1a1a2e",
             bordercolor="rgba(0,210,255,0.3)",
-            font=dict(color="#e8edf2", family="Inter")
+            font=dict(color="#e8edf2", family="Outfit")
         )
     )
 
@@ -419,7 +353,7 @@ def create_folium_map(df, center_lat, center_lon):
         _, _, color = get_aqi_level(aqi)
 
         popup_html = f"""
-        <div style="font-family: 'Inter', sans-serif; min-width: 150px; padding: 5px;">
+        <div style="font-family: 'Outfit', sans-serif; min-width: 150px; padding: 5px;">
             <h4 style="margin: 0 0 10px 0; color: #333;">Air Quality Point</h4>
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                 <b>AQI:</b> <span style="color: {color}; font-weight: bold; font-size: 16px;">{aqi:.0f}</span>
@@ -461,7 +395,7 @@ def create_pollutant_bar(pm25, pm10, no2):
             marker=dict(color=c, cornerradius=6),
             text=[f"{v:.1f}"],
             textposition="outside",
-            textfont=dict(color=c, size=12, family="Inter"),
+            textfont=dict(color=c, size=12, family="Outfit"),
             hovertemplate=f"<b>{p}</b>: {v:.1f} µg/m³<extra></extra>"
         ))
 
@@ -474,16 +408,16 @@ def create_pollutant_bar(pm25, pm10, no2):
         yaxis=dict(
             showgrid=False,
             color="#7a8ba3",
-            tickfont=dict(family="Inter", size=12, color="#9ab0c4")
+            tickfont=dict(family="Outfit", size=12, color="#9ab0c4")
         ),
         showlegend=False,
         barmode="group",
         bargap=0.35,
-        font=dict(family="Inter"),
+        font=dict(family="Outfit"),
         hoverlabel=dict(
             bgcolor="#1a1a2e",
             bordercolor="rgba(0,210,255,0.3)",
-            font=dict(color="#e8edf2", family="Inter")
+            font=dict(color="#e8edf2", family="Outfit")
         )
     )
 
@@ -495,17 +429,17 @@ def create_pollutant_bar(pm25, pm10, no2):
 nav_left, nav_right = st.columns([1.2, 2.5], gap="large")
 
 with nav_left:
-    st.markdown("""
+    st.markdown('''
     <div style="display: flex; align-items: center; gap: 12px; height: 100%; padding-top: 12px;">
-        <div style="font-size: 2.5rem; filter: drop-shadow(0 0 15px rgba(124, 92, 255, 0.6));">🌍</div>
+        <div style="font-size: 2.5rem; filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.4));">🌍</div>
         <div>
-            <h1 style="font-size: 1.5rem; font-weight: 800; margin: 0; padding: 0; color: #E2E8F0; letter-spacing: -0.5px; line-height: 1.2;">
-                AQI <span style="color: #7C5CFF;">Intelligence</span>
+            <h1 style="font-family: 'Outfit', sans-serif; font-size: 1.6rem; font-weight: 800; margin: 0; padding: 0; color: #FFFFFF; letter-spacing: -0.5px; line-height: 1.2;">
+                AQI <span style="color: #A1A1AA;">Intelligence</span>
             </h1>
-            <p style="margin: 0; font-size: 0.75rem; color: #94A3B8; font-weight: 500;">Modern Live Dashboard</p>
+            <p style="margin: 0; font-size: 0.75rem; color: #71717A; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Live Dashboard</p>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
 
 AVAILABLE_CITIES = sorted([
     "Agra", "Ahmedabad", "Ajmer", "Akola", "Aligarh", "Allahabad", "Amravati", "Amritsar", "Asansol", "Aurangabad",
@@ -600,7 +534,7 @@ if run_analysis:
 
     if analysis_mode == "Full AQI Report":
         with st.spinner("🔄 Fetching live data & generating predictions..."):
-            data = generate_report(city)
+            data = cached_report(city)
 
         if data is None:
             st.markdown("""
@@ -689,59 +623,70 @@ if run_analysis:
             </div>
             """, unsafe_allow_html=True)
         else:
-            temp, humidity, lat, lon = weather
-
             with st.spinner("🔄 Running satellite downscaling model..."):
-                sat_data = satellite_downscaling(temp, humidity, lat, lon, city=city)
+                sat_data = cached_satellite_grid(city)
 
-            df = pd.DataFrame(sat_data)
+            if sat_data is None:
+                st.markdown("""
+                <div style="text-align: center; padding: 60px 20px;">
+                    <span style="font-size: 4rem;">🌧️</span>
+                    <h3 style="color: #e8edf2; margin-top: 16px;">Weather Data Unavailable</h3>
+                    <p style="color: #7a8ba3; max-width: 400px; margin: 10px auto;">
+                        Could not fetch weather data. Please check your API key and city name.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                temp, humidity, lat, lon = cached_satellite_weather(city)
 
-            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+                df = pd.DataFrame(sat_data)
+
+                st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
             # ── Weather + Summary Metrics ──
-            avg_aqi = df["aqi"].mean()
-            max_aqi = df["aqi"].max()
-            min_aqi = df["aqi"].min()
-            level_label, _, level_color = get_aqi_level(avg_aqi)
+                avg_aqi = df["aqi"].mean()
+                max_aqi = df["aqi"].max()
+                min_aqi = df["aqi"].min()
+                level_label, _, level_color = get_aqi_level(avg_aqi)
 
-            def metric_card(title, value, icon, color="#00D4FF"):
-                return f'''
-                <div class="glass-card" style="padding: 16px; margin-bottom: 0; display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                        <span style="color: #94A3B8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">{title}</span>
-                        <span style="font-size: 1.2rem; filter: drop-shadow(0 0 8px {color});">{icon}</span>
+                def metric_card(title, value, icon, color="#00D4FF"):
+                    return f'''
+                    <div class="glass-card" style="padding: 16px; margin-bottom: 0; display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                            <span style="color: #94A3B8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">{title}</span>
+                            <span style="font-size: 1.2rem; filter: drop-shadow(0 0 8px {color});">{icon}</span>
+                        </div>
+                        <div style="display: flex; align-items: baseline; gap: 8px;">
+                            <span style="color: #E2E8F0; font-size: 2rem; font-weight: 800; letter-spacing: -1px; line-height: 1;">{value}</span>
+                        </div>
                     </div>
-                    <div style="display: flex; align-items: baseline; gap: 8px;">
-                        <span style="color: #E2E8F0; font-size: 2rem; font-weight: 800; letter-spacing: -1px; line-height: 1;">{value}</span>
-                    </div>
-                </div>
-                '''
+                    '''
 
-            mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
-            with mcol1: st.markdown(metric_card("Temperature", f"{temp}°C", "🌡️"), unsafe_allow_html=True)
-            with mcol2: st.markdown(metric_card("Humidity", f"{humidity}%", "💧"), unsafe_allow_html=True)
-            with mcol3: st.markdown(metric_card("Avg AQI", f"{avg_aqi:.0f}", "📊", level_color), unsafe_allow_html=True)
-            with mcol4: st.markdown(metric_card("Max AQI", f"{max_aqi:.0f}", "📈", "#EF4444"), unsafe_allow_html=True)
-            with mcol5: st.markdown(metric_card("Min AQI", f"{min_aqi:.0f}", "📉", "#22C55E"), unsafe_allow_html=True)
+                mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
+                with mcol1: st.markdown(metric_card("Temperature", f"{temp}°C", "🌡️"), unsafe_allow_html=True)
+                with mcol2: st.markdown(metric_card("Humidity", f"{humidity}%", "💧"), unsafe_allow_html=True)
+                with mcol3: st.markdown(metric_card("Avg AQI", f"{avg_aqi:.0f}", "📊", level_color), unsafe_allow_html=True)
+                with mcol4: st.markdown(metric_card("Max AQI", f"{max_aqi:.0f}", "📈", "#EF4444"), unsafe_allow_html=True)
+                with mcol5: st.markdown(metric_card("Min AQI", f"{min_aqi:.0f}", "📉", "#22C55E"), unsafe_allow_html=True)
 
-            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+                st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
             # ── Dashboard Split View ──
-            dash_left, dash_right = st.columns([7, 5], gap="large")
+                dash_left, dash_right = st.columns([7, 5], gap="large")
             
-            with dash_left:
-                st.markdown('<h3 style="color: #E2E8F0; font-size: 1.1rem; margin-bottom: 16px;">Interactive Map</h3>', unsafe_allow_html=True)
-                m = create_folium_map(df, lat, lon)
-                st_folium(m, height=450, use_container_width=True, returned_objects=[])
-                
-                # Distribution Chart below map
-                st.markdown('<h3 style="color: #E2E8F0; font-size: 1.1rem; margin-top: 24px; margin-bottom: 8px;">Distribution</h3>', unsafe_allow_html=True)
+                with dash_left:
+                    st.markdown('<h3 style="color: #E2E8F0; font-size: 1.1rem; margin-bottom: 16px;">Interactive Map</h3>', unsafe_allow_html=True)
+                    m = create_folium_map(df, lat, lon)
+                    st_folium(m, height=450, use_container_width=True, returned_objects=[])
+                    
+                    # Distribution Chart below map
+                    st.markdown('<h3 style="color: #E2E8F0; font-size: 1.1rem; margin-top: 24px; margin-bottom: 8px;">Distribution</h3>', unsafe_allow_html=True)
 
-            import numpy as np
-            fig_hist = go.Figure()
+                import numpy as np
+                fig_hist = go.Figure()
 
-            counts, bins = np.histogram(df["aqi"], bins=15)
-            bin_centers = 0.5 * (bins[:-1] + bins[1:])
+                counts, bins = np.histogram(df["aqi"], bins=15)
+                bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
             # Smooth trendline overlay
             fig_hist.add_trace(go.Scatter(
@@ -785,18 +730,18 @@ if run_analysis:
                 xaxis=dict(
                     title=dict(text="AQI Value", font=dict(color="#5a6a7a", size=12)),
                     showgrid=False, color="#5a6a7a",
-                    tickfont=dict(family="Inter", size=11)
+                    tickfont=dict(family="Outfit", size=11)
                 ),
                 yaxis=dict(
                     title=dict(text="Frequency", font=dict(color="#5a6a7a", size=12)),
                     showgrid=True, gridcolor="rgba(255,255,255,0.04)", color="#5a6a7a",
-                    tickfont=dict(family="Inter", size=11)
+                    tickfont=dict(family="Outfit", size=11)
                 ),
-                font=dict(family="Inter"),
+                font=dict(family="Outfit"),
                 hoverlabel=dict(
                     bgcolor="#1a1a2e",
                     bordercolor="rgba(0,210,255,0.3)",
-                    font=dict(color="#e8edf2", family="Inter")
+                    font=dict(color="#e8edf2", family="Outfit")
                 )
             )
             st.plotly_chart(fig_hist, use_container_width=True, key="hist")
@@ -860,36 +805,152 @@ if run_analysis:
                 st.markdown(html_clean, unsafe_allow_html=True)
 
 else:
-    # ── Welcome / Landing State ──
-    st.markdown("""
-    <div style="text-align: center; padding: 40px 20px 20px 20px;">
-        <div style="display: inline-flex; gap: 30px; justify-content: center; flex-wrap: wrap;">
-            <div class="glass-card" style="width: 200px; text-align: center; padding: 30px 20px;">
-                <span style="font-size: 2.5rem;">📊</span>
-                <h4 style="color: #e8edf2; margin: 12px 0 6px 0; font-size: 1rem;">AQI Reports</h4>
-                <p style="color: #6b7c8d; font-size: 0.8rem; margin: 0;">
-                    ML-powered predictions across multiple monitoring stations
-                </p>
-            </div>
-            <div class="glass-card" style="width: 200px; text-align: center; padding: 30px 20px;">
-                <span style="font-size: 2.5rem;">📈</span>
-                <h4 style="color: #e8edf2; margin: 12px 0 6px 0; font-size: 1rem;">7-Day Forecast</h4>
-                <p style="color: #6b7c8d; font-size: 0.8rem; margin: 0;">
-                    Forward-looking AQI trend analysis with smart adjustments
-                </p>
-            </div>
-            <div class="glass-card" style="width: 200px; text-align: center; padding: 30px 20px;">
-                <span style="font-size: 2.5rem;">🛰️</span>
-                <h4 style="color: #e8edf2; margin: 12px 0 6px 0; font-size: 1rem;">Satellite Grid</h4>
-                <p style="color: #6b7c8d; font-size: 0.8rem; margin: 0;">
-                    Geographic AQI downscaling with interactive map view
-                </p>
-            </div>
-        </div>
-        <div style="margin-top: 40px;">
-            <p style="color: #5a6a7a; font-size: 0.88rem;">
-                👈 Select a city and analysis mode from the sidebar, then click <strong style="color: #00d2ff;">Run Analysis</strong>
+    # ── Welcome / Landing State (ThreeJS) ──
+    components.html('''
+    <div id="globe-container" style="width: 100%; height: 100%; min-height: 480px; display: flex; justify-content: center; align-items: center; position: relative; font-family: 'Outfit', sans-serif;">
+        <div style="position: absolute; z-index: 10; text-align: center; pointer-events: none;">
+            <h1 style="font-size: 4rem; font-weight: 800; color: #fff; margin: 0; letter-spacing: -1px; text-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+                Next-Gen <span style="background: linear-gradient(135deg, #ffffff, #a1a1aa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">AQI</span> Intelligence
+            </h1>
+            <p style="color: #A1A1AA; font-size: 1.2rem; margin-top: 10px; font-weight: 300; letter-spacing: 0.5px;">
+                Real-time downscaling and AI forecasting at scale.
             </p>
+            <div style="margin-top: 30px; display: flex; justify-content: center; gap: 20px;">
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 15px 25px; border-radius: 12px; backdrop-filter: blur(10px);">
+                    <span style="display: block; font-size: 1.5rem; font-weight: 700; color: #fff;">🛰️</span>
+                    <span style="font-size: 0.8rem; color: #A1A1AA; text-transform: uppercase; letter-spacing: 1px;">Satellite</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 15px 25px; border-radius: 12px; backdrop-filter: blur(10px);">
+                    <span style="display: block; font-size: 1.5rem; font-weight: 700; color: #fff;">🧠</span>
+                    <span style="font-size: 0.8rem; color: #A1A1AA; text-transform: uppercase; letter-spacing: 1px;">AI Models</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 15px 25px; border-radius: 12px; backdrop-filter: blur(10px);">
+                    <span style="display: block; font-size: 1.5rem; font-weight: 700; color: #fff;">🌍</span>
+                    <span style="font-size: 0.8rem; color: #A1A1AA; text-transform: uppercase; letter-spacing: 1px;">Global</span>
+                </div>
+            </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const container = document.getElementById('globe-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.12);
+
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        // Core Sphere
+        const geometry = new THREE.SphereGeometry(1.5, 64, 64);
+        const material = new THREE.MeshBasicMaterial({
+            color: 0x333333,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.15
+        });
+        const sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+
+        // Particles
+        const particleGeometry = new THREE.BufferGeometry();
+        const particleCount = 5000;
+        const posArray = new Float32Array(particleCount * 3);
+        const colorArray = new Float32Array(particleCount * 3);
+
+        for(let i = 0; i < particleCount; i++) {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = u * 2.0 * Math.PI;
+            const phi = Math.acos(2.0 * v - 1.0);
+            const r = 1.52 + Math.random() * 0.05;
+
+            posArray[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            posArray[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+            posArray[i*3+2] = r * Math.cos(phi);
+
+            // Silver/White/Cyan premium mix
+            const rand = Math.random();
+            if (rand > 0.8) {
+                colorArray[i*3] = 0.0; colorArray[i*3+1] = 0.82; colorArray[i*3+2] = 1.0; // Cyan
+            } else if (rand > 0.4) {
+                colorArray[i*3] = 1.0; colorArray[i*3+1] = 1.0; colorArray[i*3+2] = 1.0; // White
+            } else {
+                colorArray[i*3] = 0.6; colorArray[i*3+1] = 0.6; colorArray[i*3+2] = 0.65; // Silver
+            }
+        }
+
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        particleGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 0.012,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particlesMesh = new THREE.Points(particleGeometry, particleMaterial);
+        scene.add(particlesMesh);
+
+        // Outer Glow Ring
+        const ringGeo = new THREE.RingGeometry(1.9, 1.92, 64);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.1 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        scene.add(ring);
+
+        // Animation
+        let mouseX = 0;
+        let mouseY = 0;
+        let targetX = 0;
+        let targetY = 0;
+
+        container.addEventListener('mousemove', (event) => {
+            const rect = container.getBoundingClientRect();
+            mouseX = (event.clientX - rect.left - container.clientWidth / 2) * 0.001;
+            mouseY = (event.clientY - rect.top - container.clientHeight / 2) * 0.001;
+        });
+
+        const animate = () => {
+            requestAnimationFrame(animate);
+
+            targetX = mouseX * 0.5;
+            targetY = mouseY * 0.5;
+
+            particlesMesh.rotation.y += 0.0015;
+            sphere.rotation.y += 0.001;
+            
+            particlesMesh.rotation.x += 0.05 * (targetY - particlesMesh.rotation.x);
+            particlesMesh.rotation.y += 0.05 * (targetX - particlesMesh.rotation.y);
+            
+            ring.rotation.z -= 0.0005;
+
+            renderer.render(scene, camera);
+        };
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background: transparent; }
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+    </style>
+    ''', height=480)
+    
+    st.markdown('''
+    <div style="text-align: center; margin-top: 20px;">
+        <p style="color: #71717A; font-size: 0.9rem; font-family: 'Outfit', sans-serif;">
+            Select a city and analysis mode from the controls above to begin.
+        </p>
+    </div>
+    ''', unsafe_allow_html=True)

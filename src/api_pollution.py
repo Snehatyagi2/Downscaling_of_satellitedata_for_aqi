@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 import requests
 import random
+from src.stability import stable_seed
 
 load_dotenv()
 OPENAQ_API_KEY = os.getenv("OPENAQ_API_KEY", "")
@@ -103,6 +104,7 @@ def _fetch_openaq_v3(city):
 def _generate_simulated_pollution(city):
     """City-tier-aware simulated pollution with station-type modifiers."""
     pm25_lo, pm25_hi, pm10_lo, pm10_hi, no2_lo, no2_hi = get_city_pollution_ranges(city)
+    rng = random.Random(stable_seed(city, bucket_seconds=1800, salt="pollution"))
 
     stations = [
         ("{city} - Central Station", 1.0),
@@ -117,9 +119,9 @@ def _generate_simulated_pollution(city):
         location = template.format(city=city)
         results.append({
             "location": location,
-            "pm25": round(max(1, random.uniform(pm25_lo * mod, pm25_hi * mod)), 2),
-            "pm10": round(max(2, random.uniform(pm10_lo * mod, pm10_hi * mod)), 2),
-            "no2": round(max(1, random.uniform(no2_lo * mod, no2_hi * mod)), 2),
+            "pm25": round(max(1, rng.uniform(pm25_lo * mod, pm25_hi * mod)), 2),
+            "pm10": round(max(2, rng.uniform(pm10_lo * mod, pm10_hi * mod)), 2),
+            "no2": round(max(1, rng.uniform(no2_lo * mod, no2_hi * mod)), 2),
         })
     return results
 
@@ -134,11 +136,12 @@ def get_pollution_history(city):
     # Simulated: generate realistic AQI history for city tier
     from src.logic import compute_aqi
     ranges = get_city_pollution_ranges(city)
+    rng = random.Random(stable_seed(city, bucket_seconds=1800, salt="history"))
     history = []
     for _ in range(10):
-        pm25 = random.uniform(ranges[0], ranges[1])
-        pm10 = random.uniform(ranges[2], ranges[3])
-        no2 = random.uniform(ranges[4], ranges[5])
+        pm25 = rng.uniform(ranges[0], ranges[1])
+        pm10 = rng.uniform(ranges[2], ranges[3])
+        no2 = rng.uniform(ranges[4], ranges[5])
         history.append(round(compute_aqi(pm25, pm10, no2), 2))
     return history
 
